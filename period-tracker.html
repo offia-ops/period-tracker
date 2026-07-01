@@ -234,7 +234,7 @@
             <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1))} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition w-10 h-10 flex items-center justify-center">&lt;</button>
             <div className="text-center flex flex-col items-center">
               <h2 className="text-xl font-bold text-gray-800">{currentMonth.getFullYear()} 年 {currentMonth.getMonth() + 1} 月</h2>
-              <button onClick={handleBackToToday} className="text-[11px] font-medium text-rose-400 hover:text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1 rounded-full mt-1.5 transition-colors">回到今天</button>
+              <button onClick={handleBackToToday} className="text-[11px] font-medium text-blue-500 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-full mt-1.5 transition-colors">回到今天</button>
             </div>
             <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1))} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition w-10 h-10 flex items-center justify-center">&gt;</button>
           </div>
