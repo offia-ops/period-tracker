@@ -40,7 +40,9 @@
     const { useState, useMemo, useEffect } = React;
 
     const SYMPTOM_OPTIONS = ['腹痛', '腰痠', '頭痛', '疲倦', '水腫', '情緒低落', '長痘痘', '胸部脹痛'];
+    const SPOTTING_TAGS = ['排卵期前後', '微量點狀', '咖啡色分泌物', '單側下腹微悶', '熬夜壓力', '性行為後'];
     const FLOW_OPTIONS = ['少', '中', '多'];
+    const SPOTTING_FLOW_OPTIONS = ['點狀微量', '少', '中'];
     const MONTH_NAMES_TITLE = [
       'January', 'February', 'March', 'April', 'May', 'June',
       'July', 'August', 'September', 'October', 'November', 'December'
@@ -108,14 +110,23 @@
       return isNaN(diff) ? 0 : diff;
     };
 
-    const normalizeRecord = (r) => ({
-      ...r,
-      startDate: normalizeDateStr(r.startDate),
-      endDate: normalizeDateStr(r.endDate),
-      flow: r.flow || '中',
-      symptoms: Array.isArray(r.symptoms) ? r.symptoms : [],
-      notes: r.notes || ''
-    });
+    // 正規化整筆紀錄（自動識別是否為非經期異常出血）
+    const normalizeRecord = (r) => {
+      const rawFlow = String(r.flow || '中');
+      const isSpotting = r.recordType === 'spotting' || rawFlow.startsWith('非經期出血');
+      const cleanFlow = rawFlow.replace(/^非經期出血\(|\)$/g, '') || (isSpotting ? '點狀微量' : '中');
+      const start = normalizeDateStr(r.startDate);
+      const end = normalizeDateStr(r.endDate) || start;
+      return {
+        ...r,
+        recordType: isSpotting ? 'spotting' : 'period',
+        startDate: start,
+        endDate: end,
+        flow: cleanFlow,
+        symptoms: Array.isArray(r.symptoms) ? r.symptoms : [],
+        notes: r.notes || ''
+      };
+    };
 
     // --- 主元件 ---
     function App() {
@@ -129,11 +140,11 @@
       const [settings, setSettings] = useState({ cycleLength: 28, periodLength: 5 });
       const [records, setRecords] = useState([]);
       
-      const [newRecord, setNewRecord] = useState({ startDate: '', endDate: '', flow: '中', symptoms: [], notes: '' });
+      const [newRecord, setNewRecord] = useState({ recordType: 'period', startDate: '', endDate: '', flow: '中', symptoms: [], notes: '' });
       const [showAddForm, setShowAddForm] = useState(false);
       
       const [editingRecordId, setEditingRecordId] = useState(null);
-      const [editRecordData, setEditRecordData] = useState({ startDate: '', endDate: '', flow: '中', symptoms: [], notes: '' });
+      const [editRecordData, setEditRecordData] = useState({ recordType: 'period', startDate: '', endDate: '', flow: '中', symptoms: [], notes: '' });
 
       const [sheetUrl, setSheetUrl] = useState('');
       const [backupCode, setBackupCode] = useState('');
@@ -182,6 +193,7 @@
             const today = new Date();
             setRecords([{
               id: '1',
+              recordType: 'period',
               startDate: formatDateObj(addDays(today, -15)),
               endDate: formatDateObj(addDays(today, -11)),
               flow: '中',
@@ -206,6 +218,15 @@
 
         setSyncStatus('syncing');
         try {
+          // 格式化寫入 Google Sheets：非經期異常出血在流量欄標示為「非經期出血(...)」以便區分
+          const payloadRecords = recordsToSync.map(r => {
+            const norm = normalizeRecord(r);
+            return {
+              ...norm,
+              flow: norm.recordType === 'spotting' ? `非經期出血(${norm.flow})` : norm.flow
+            };
+          });
+
           await fetch(targetUrl, {
             method: 'POST',
             mode: 'no-cors',
@@ -214,7 +235,7 @@
             },
             body: JSON.stringify({
               settings: settings,
-              records: recordsToSync.map(normalizeRecord)
+              records: payloadRecords
             })
           });
           setSyncStatus('synced');
@@ -250,10 +271,19 @@
         }
       };
 
-      const latestRecord = useMemo(() => {
-        if (records.length === 0) return null;
-        return [...records].sort((a, b) => (a.startDate < b.startDate ? 1 : -1))[0];
+      // 僅篩選「正式月經」來計算最新週期與預測，避免非經期點狀出血干擾週期推算
+      const periodRecords = useMemo(() => {
+        return records.filter(r => r.recordType !== 'spotting');
       }, [records]);
+
+      const spottingRecords = useMemo(() => {
+        return records.filter(r => r.recordType === 'spotting');
+      }, [records]);
+
+      const latestRecord = useMemo(() => {
+        if (periodRecords.length === 0) return null;
+        return [...periodRecords].sort((a, b) => (a.startDate < b.startDate ? 1 : -1))[0];
+      }, [periodRecords]);
 
       const predictions = useMemo(() => {
         if (!latestRecord) return [];
@@ -308,12 +338,13 @@
           const dateStr = formatDateObj(dateObj);
           let type = 'safe'; 
           
-          const isActualPeriod = records.some(r => isDateBetween(dateStr, r.startDate, r.endDate));
+          const isActualPeriod = periodRecords.some(r => isDateBetween(dateStr, r.startDate, r.endDate));
+          const isSpotting = spottingRecords.some(r => isDateBetween(dateStr, r.startDate, r.endDate));
           let isPredictedPeriod = false;
           let isOvulation = false;
           let isFertile = false;
 
-          if (!isActualPeriod && dateStr > latestEndDate && dateStr >= todayStr) {
+          if (!isActualPeriod && !isSpotting && dateStr > latestEndDate && dateStr >= todayStr) {
             for (const p of predictions) {
               if (isDateBetween(dateStr, p.start, p.end)) isPredictedPeriod = true;
               if (dateStr === p.ovulation) isOvulation = true;
@@ -322,6 +353,7 @@
           }
 
           if (isActualPeriod) type = 'actual_period';
+          else if (isSpotting) type = 'spotting';
           else if (isPredictedPeriod) type = 'predicted_period';
           else if (isOvulation) type = 'ovulation';
           else if (isFertile) type = 'fertile';
@@ -335,16 +367,17 @@
           });
         }
         return days;
-      }, [currentMonth, records, predictions, todayStr, latestRecord]);
+      }, [currentMonth, periodRecords, spottingRecords, predictions, todayStr, latestRecord]);
 
       const handleAddRecord = (e) => {
         e.preventDefault();
-        if (!newRecord.startDate || !newRecord.endDate) return;
+        if (!newRecord.startDate) return;
+        const finalEndDate = newRecord.endDate || newRecord.startDate;
         const newId = Date.now().toString();
-        const updatedRecords = [...records, normalizeRecord({ ...newRecord, id: newId })];
+        const updatedRecords = [...records, normalizeRecord({ ...newRecord, endDate: finalEndDate, id: newId })];
         setRecords(updatedRecords);
         saveData('menstrual_records', updatedRecords);
-        setNewRecord({ startDate: '', endDate: '', flow: '中', symptoms: [], notes: '' });
+        setNewRecord({ recordType: 'period', startDate: '', endDate: '', flow: '中', symptoms: [], notes: '' });
         setShowAddForm(false);
       };
 
@@ -356,9 +389,10 @@
       };
 
       const handleSaveEdit = (id) => {
-        if (!editRecordData.startDate || !editRecordData.endDate) return;
+        if (!editRecordData.startDate) return;
+        const finalEndDate = editRecordData.endDate || editRecordData.startDate;
         const updatedRecords = records.map(r => 
-          r.id === id ? normalizeRecord({ ...r, ...editRecordData }) : r
+          r.id === id ? normalizeRecord({ ...r, ...editRecordData, endDate: finalEndDate }) : r
         );
         setRecords(updatedRecords);
         saveData('menstrual_records', updatedRecords);
@@ -550,6 +584,8 @@
 
                       if (cell.type === 'actual_period') {
                         circleClass = 'bg-[#F04E7B] text-white font-bold shadow-[0_4px_10px_rgba(240,78,123,0.35)]';
+                      } else if (cell.type === 'spotting') {
+                        circleClass = 'bg-[#FEF3C7] text-[#B45309] font-bold border-2 border-dashed border-[#F59E0B]';
                       } else if (cell.type === 'predicted_period') {
                         circleClass = 'bg-[#FDE4EC] text-[#D83866] font-semibold border border-dashed border-[#F04E7B]';
                       } else if (cell.type === 'ovulation') {
@@ -572,10 +608,15 @@
                   </div>
                 </div>
 
-                <div className="mt-7 pt-3.5 border-t border-[#EEF2F3] flex flex-wrap items-center gap-x-3.5 gap-y-2 text-[11px] text-[#5B7B86] z-10 pr-14">
+                {/* 底部圖例說明（含非經期出血與今天標示） */}
+                <div className="mt-7 pt-3.5 border-t border-[#EEF2F3] flex flex-wrap items-center gap-x-3 gap-y-2 text-[11px] text-[#5B7B86] z-10 pr-14">
                   <div className="flex items-center gap-1.5">
                     <span className="w-3 h-3 rounded-full bg-[#F04E7B] inline-block"></span>
                     <span>實際月經</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-full bg-[#FEF3C7] border border-dashed border-[#F59E0B] inline-block"></span>
+                    <span>非經期出血</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="w-3 h-3 rounded-full bg-[#FDE4EC] border border-dashed border-[#F04E7B] inline-block"></span>
@@ -600,74 +641,135 @@
         );
       };
 
-      const renderRecordFormFields = (data, setData) => (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-[#5B7B86] mb-1">開始日期</label>
-              <input type="date" required value={data.startDate} onChange={e => setData({...data, startDate: e.target.value})} className="w-full text-sm border-[#DCE5E8] rounded-xl p-2 outline-none border bg-white text-[#4A616A]"/>
-            </div>
-            <div>
-              <label className="block text-xs text-[#5B7B86] mb-1">結束日期</label>
-              <input type="date" required value={data.endDate} onChange={e => setData({...data, endDate: e.target.value})} className="w-full text-sm border-[#DCE5E8] rounded-xl p-2 outline-none border bg-white text-[#4A616A]"/>
-            </div>
-          </div>
+      // 共用表單欄位（支援「正式月經」與「非經期異常出血」切換）
+      const renderRecordFormFields = (data, setData) => {
+        const isSpotting = data.recordType === 'spotting';
+        const activeFlowOptions = isSpotting ? SPOTTING_FLOW_OPTIONS : FLOW_OPTIONS;
+        const activeTagOptions = isSpotting ? SPOTTING_TAGS : SYMPTOM_OPTIONS;
 
-          <div>
-            <label className="block text-xs text-[#5B7B86] mb-1.5">經血流量</label>
-            <div className="grid grid-cols-3 gap-2">
-              {FLOW_OPTIONS.map(option => (
+        return (
+          <div className="space-y-4">
+            {/* 紀錄類型切換 */}
+            <div>
+              <label className="block text-xs text-[#5B7B86] mb-1.5">紀錄類型</label>
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  key={option}
-                  onClick={() => setData({...data, flow: option})}
-                  className={`py-1.5 text-xs font-medium rounded-xl border transition ${
-                    data.flow === option 
-                      ? 'bg-[#F04E7B] text-white border-[#F04E7B] shadow-xs' 
+                  onClick={() => setData({ ...data, recordType: 'period', flow: '中', symptoms: [] })}
+                  className={`py-2 text-xs font-medium rounded-xl border transition flex items-center justify-center gap-1.5 ${
+                    !isSpotting
+                      ? 'bg-[#F04E7B] text-white border-[#F04E7B] shadow-xs'
                       : 'bg-white text-[#5B7B86] border-[#DCE5E8] hover:bg-[#F7FAFB]'
                   }`}
                 >
-                  💧 {option}
+                  <span>🩸 正式月經</span>
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => setData({ ...data, recordType: 'spotting', flow: '點狀微量', symptoms: ['排卵期前後'] })}
+                  className={`py-2 text-xs font-medium rounded-xl border transition flex items-center justify-center gap-1.5 ${
+                    isSpotting
+                      ? 'bg-[#F59E0B] text-white border-[#F59E0B] shadow-xs'
+                      : 'bg-white text-[#5B7B86] border-[#DCE5E8] hover:bg-[#F7FAFB]'
+                  }`}
+                >
+                  <span>💧 非經期異常出血</span>
+                </button>
+              </div>
+              {isSpotting && (
+                <p className="text-[11px] text-[#B45309] bg-[#FEF3C7]/70 px-2.5 py-1.5 rounded-lg mt-2 leading-relaxed">
+                  提示：非經期出血（如排卵期點狀出血）會獨立標記，不會影響您的週期天數與下次經期預測。
+                </p>
+              )}
             </div>
-          </div>
 
-          <div>
-            <label className="block text-xs text-[#5B7B86] mb-1.5">不適症狀（可複選）</label>
-            <div className="flex flex-wrap gap-1.5">
-              {SYMPTOM_OPTIONS.map(symptom => {
-                const isSelected = (data.symptoms || []).includes(symptom);
-                return (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-[#5B7B86] mb-1">{isSpotting ? '出血日期' : '開始日期'}</label>
+                <input 
+                  type="date" 
+                  required 
+                  value={data.startDate} 
+                  onChange={e => {
+                    const val = e.target.value;
+                    setData({
+                      ...data, 
+                      startDate: val,
+                      // 若為非經期出血且尚未選結束日，自動帶入同一天方便單日紀錄
+                      endDate: isSpotting && !data.endDate ? val : data.endDate
+                    });
+                  }} 
+                  className="w-full text-sm border-[#DCE5E8] rounded-xl p-2 outline-none border bg-white text-[#4A616A]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-[#5B7B86] mb-1">{isSpotting ? '結束日期（單日可同左）' : '結束日期'}</label>
+                <input 
+                  type="date" 
+                  required 
+                  value={data.endDate} 
+                  onChange={e => setData({...data, endDate: e.target.value})} 
+                  className="w-full text-sm border-[#DCE5E8] rounded-xl p-2 outline-none border bg-white text-[#4A616A]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs text-[#5B7B86] mb-1.5">{isSpotting ? '出血程度' : '經血流量'}</label>
+              <div className="grid grid-cols-3 gap-2">
+                {activeFlowOptions.map(option => (
                   <button
                     type="button"
-                    key={symptom}
-                    onClick={() => setData({...data, symptoms: toggleSymptom(data.symptoms || [], symptom)})}
-                    className={`px-2.5 py-1 text-xs rounded-full border transition ${
-                      isSelected 
-                        ? 'bg-[#EDE3F7] text-[#6E4D94] border-[#C9B2E3] font-medium' 
+                    key={option}
+                    onClick={() => setData({...data, flow: option})}
+                    className={`py-1.5 text-xs font-medium rounded-xl border transition ${
+                      data.flow === option 
+                        ? (isSpotting ? 'bg-[#F59E0B] text-white border-[#F59E0B] shadow-xs' : 'bg-[#F04E7B] text-white border-[#F04E7B] shadow-xs')
                         : 'bg-white text-[#5B7B86] border-[#DCE5E8] hover:bg-[#F7FAFB]'
                     }`}
                   >
-                    {symptom}
+                    💧 {option}
                   </button>
-                );
-              })}
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs text-[#5B7B86] mb-1.5">{isSpotting ? '出血情境與伴隨症狀（可複選）' : '不適症狀（可複選）'}</label>
+              <div className="flex flex-wrap gap-1.5">
+                {activeTagOptions.map(symptom => {
+                  const isSelected = (data.symptoms || []).includes(symptom);
+                  return (
+                    <button
+                      type="button"
+                      key={symptom}
+                      onClick={() => setData({...data, symptoms: toggleSymptom(data.symptoms || [], symptom)})}
+                      className={`px-2.5 py-1 text-xs rounded-full border transition ${
+                        isSelected 
+                          ? (isSpotting ? 'bg-[#FEF3C7] text-[#92400E] border-[#FCD34D] font-medium' : 'bg-[#EDE3F7] text-[#6E4D94] border-[#C9B2E3] font-medium')
+                          : 'bg-white text-[#5B7B86] border-[#DCE5E8] hover:bg-[#F7FAFB]'
+                      }`}
+                    >
+                      {symptom}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs text-[#5B7B86] mb-1">備註</label>
+              <input 
+                type="text" 
+                value={data.notes || ''} 
+                onChange={e => setData({...data, notes: e.target.value})} 
+                placeholder={isSpotting ? "例如：護墊上一點點粉紅、排卵期第14天..." : "例如：吃止痛藥、喝熱飲、作息熬夜..."}
+                className="w-full text-xs border-[#DCE5E8] rounded-xl p-2 outline-none border bg-white text-[#4A616A]"
+              />
             </div>
           </div>
-
-          <div>
-            <label className="block text-xs text-[#5B7B86] mb-1">備註</label>
-            <input 
-              type="text" 
-              value={data.notes || ''} 
-              onChange={e => setData({...data, notes: e.target.value})} 
-              placeholder="例如：吃止痛藥、喝熱飲、作息熬夜..."
-              className="w-full text-xs border-[#DCE5E8] rounded-xl p-2 outline-none border bg-white text-[#4A616A]"
-            />
-          </div>
-        </div>
-      );
+        );
+      };
 
       const renderHistory = () => (
         <div className="bg-white rounded-3xl shadow-[0_10px_28px_rgba(91,123,134,0.08)] p-5 sm:p-7 animate-fade-in mb-24">
@@ -690,6 +792,7 @@
               [...records].sort((a, b) => (a.startDate < b.startDate ? 1 : -1)).map(record => {
                 const cleanStart = normalizeDateStr(record.startDate);
                 const cleanEnd = normalizeDateStr(record.endDate);
+                const isSpotting = record.recordType === 'spotting';
 
                 if (editingRecordId === record.id) {
                   return (
@@ -704,15 +807,28 @@
                 }
                 const daysCount = calcDaysDiff(cleanStart, cleanEnd);
                 return (
-                  <div key={record.id} className="p-4 border border-[#EEF2F3] rounded-2xl bg-white hover:border-[#DCE5E8] transition">
+                  <div key={record.id} className={`p-4 border rounded-2xl transition ${isSpotting ? 'border-[#FDE68A] bg-[#FFFBEB]/40' : 'border-[#EEF2F3] bg-white hover:border-[#DCE5E8]'}`}>
                     <div className="flex justify-between items-start">
                       <div className="flex items-center gap-3">
-                        <div className="bg-[#FDE4EC] p-2.5 rounded-full text-[#F04E7B] text-sm">🩸</div>
+                        <div className={`p-2.5 rounded-full text-sm ${isSpotting ? 'bg-[#FEF3C7] text-[#D97706]' : 'bg-[#FDE4EC] text-[#F04E7B]'}`}>
+                          {isSpotting ? '💧' : '🩸'}
+                        </div>
                         <div>
-                          <div className="font-num text-sm font-bold text-[#4A616A]">{cleanStart} ~ {cleanEnd}</div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-num text-sm font-bold text-[#4A616A]">
+                              {cleanStart === cleanEnd ? cleanStart : `${cleanStart} ~ ${cleanEnd}`}
+                            </span>
+                            {isSpotting && (
+                              <span className="text-[10px] font-bold text-[#B45309] bg-[#FEF3C7] px-2 py-0.5 rounded-full">
+                                非經期異常出血
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-2 mt-1">
                             <span className="text-[11px] text-[#5B7B86] bg-[#F1F6F8] px-2.5 py-0.5 rounded-full">共 {daysCount} 天</span>
-                            <span className="text-[11px] text-[#E64270] bg-[#FFF0F4] px-2.5 py-0.5 rounded-full">流量：{record.flow || '中'}</span>
+                            <span className={`text-[11px] px-2.5 py-0.5 rounded-full ${isSpotting ? 'text-[#B45309] bg-[#FEF3C7]' : 'text-[#E64270] bg-[#FFF0F4]'}`}>
+                              {isSpotting ? `程度：${record.flow}` : `流量：${record.flow || '中'}`}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -720,9 +836,10 @@
                         <button onClick={() => {
                           setEditingRecordId(record.id); 
                           setEditRecordData({
+                            recordType: isSpotting ? 'spotting' : 'period',
                             startDate: cleanStart, 
                             endDate: cleanEnd,
-                            flow: record.flow || '中',
+                            flow: record.flow || (isSpotting ? '點狀微量' : '中'),
                             symptoms: record.symptoms || [],
                             notes: record.notes || ''
                           }); 
@@ -733,11 +850,11 @@
                     </div>
 
                     {((record.symptoms && record.symptoms.length > 0) || record.notes) && (
-                      <div className="mt-2.5 pt-2.5 border-t border-gray-50 pl-11 space-y-1.5">
+                      <div className="mt-2.5 pt-2.5 border-t border-gray-100/80 pl-11 space-y-1.5">
                         {record.symptoms && record.symptoms.length > 0 && (
                           <div className="flex flex-wrap gap-1">
                             {record.symptoms.map(s => (
-                              <span key={s} className="text-[10px] bg-[#F4EEFA] text-[#6E4D94] border border-[#E2D3F2] px-2.5 py-0.5 rounded-full">
+                              <span key={s} className={`text-[10px] border px-2.5 py-0.5 rounded-full ${isSpotting ? 'bg-[#FEF3C7]/70 text-[#92400E] border-[#FDE68A]' : 'bg-[#F4EEFA] text-[#6E4D94] border-[#E2D3F2]'}`}>
                                 {s}
                               </span>
                             ))}
