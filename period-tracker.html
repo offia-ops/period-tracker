@@ -54,7 +54,20 @@
       const y = dateObj.getFullYear();
       const m = String(dateObj.getMonth() + 1).padStart(2, '0');
       const d = String(dateObj.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`; };  const normalizeDateStr = (val) => { if (!val) return ''; const str = String(val).trim();  const isoRegex = new RegExp('^\\d{4}-\\d{2}-\\d{2}$'); if (isoRegex.test(str)) return str;  const slashRegex = new RegExp('^(\\d{4})[/\\-](\\d{1,2})[/\\-](\\d{1,2})'); const slashMatch = str.match(slashRegex); if (slashMatch) { return `${slashMatch[1]}-${slashMatch[2].padStart(2, '0')}-${slashMatch[3].padStart(2, '0')}`;
+      return `${y}-${m}-${d}`;
+    };
+
+    const normalizeDateStr = (val) => {
+      if (!val) return '';
+      const str = String(val).trim();
+      
+      const isoRegex = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+      if (isoRegex.test(str)) return str;
+      
+      const slashRegex = new RegExp('^(\\d{4})[/\\-](\\d{1,2})[/\\-](\\d{1,2})');
+      const slashMatch = str.match(slashRegex);
+      if (slashMatch) {
+        return `${slashMatch[1]}-${slashMatch[2].padStart(2, '0')}-${slashMatch[3].padStart(2, '0')}`;
       }
 
       const parenRegex = new RegExp('\\s*\\(.*?\\)\\s*', 'g');
@@ -152,7 +165,64 @@
             setRecords(normalizedRecords);
             localStorage.setItem('menstrual_records', JSON.stringify(normalizedRecords));
             setSyncStatus('synced');
-            if (!silent) alert(`🎉 成功從 Google Sheets 讀取 ${normalizedRecords.length} 筆紀錄！`); } else { throw new Error(result.message \vert{}\vert{} '資料格式錯誤'); } } catch (error) { console.error('從 Google Sheets 讀取失敗:', error); setSyncStatus('error'); if (!silent) alert('❌ 讀取失敗，請確認網址是否正確，且 Apps Script 部署權限已設為「所有人」。'); } };  useEffect(() => { try { const savedSettings = localStorage.getItem('menstrual_settings'); if (savedSettings) setSettings(JSON.parse(savedSettings));  const savedSheetUrl = localStorage.getItem('menstrual_sheet_url'); if (savedSheetUrl) setSheetUrl(savedSheetUrl);  const savedRecords = localStorage.getItem('menstrual_records'); if (savedRecords) { const parsed = JSON.parse(savedRecords).map(normalizeRecord); setRecords(parsed); localStorage.setItem('menstrual_records', JSON.stringify(parsed)); } else { const today = new Date(); setRecords([{ id: '1', recordType: 'period', startDate: formatDateObj(addDays(today, -15)), endDate: formatDateObj(addDays(today, -11)), flow: '中', symptoms: [], notes: '' }]); }  if (savedSheetUrl) { fetchFromGoogleSheet(savedSheetUrl, true); } } catch (e) { console.error('讀取本機設定失敗:', e); } }, []);  const syncToGoogleSheet = async (recordsToSync, targetUrl = sheetUrl) => { if (!targetUrl \vert{}\vert{} !targetUrl.startsWith('https://script.google.com/')) { setSyncStatus('synced'); return; }  setSyncStatus('syncing'); try { const payloadRecords = recordsToSync.map(r => { const norm = normalizeRecord(r); return { ...norm, flow: norm.recordType === 'spotting' ? `非經期出血(${norm.flow})` : norm.flow
+            if (!silent) alert(`🎉 成功從 Google Sheets 讀取 ${normalizedRecords.length} 筆紀錄！`);
+          } else {
+            throw new Error(result.message || '資料格式錯誤');
+          }
+        } catch (error) {
+          console.error('從 Google Sheets 讀取失敗:', error);
+          setSyncStatus('error');
+          if (!silent) alert('❌ 讀取失敗，請確認網址是否正確，且 Apps Script 部署權限已設為「所有人」。');
+        }
+      };
+
+      useEffect(() => {
+        try {
+          const savedSettings = localStorage.getItem('menstrual_settings');
+          if (savedSettings) setSettings(JSON.parse(savedSettings));
+          
+          const savedSheetUrl = localStorage.getItem('menstrual_sheet_url');
+          if (savedSheetUrl) setSheetUrl(savedSheetUrl);
+
+          const savedRecords = localStorage.getItem('menstrual_records');
+          if (savedRecords) {
+            const parsed = JSON.parse(savedRecords).map(normalizeRecord);
+            setRecords(parsed);
+            localStorage.setItem('menstrual_records', JSON.stringify(parsed));
+          } else {
+            const today = new Date();
+            setRecords([{
+              id: '1',
+              recordType: 'period',
+              startDate: formatDateObj(addDays(today, -15)),
+              endDate: formatDateObj(addDays(today, -11)),
+              flow: '中',
+              symptoms: [],
+              notes: ''
+            }]);
+          }
+
+          if (savedSheetUrl) {
+            fetchFromGoogleSheet(savedSheetUrl, true);
+          }
+        } catch (e) {
+          console.error('讀取本機設定失敗:', e);
+        }
+      }, []);
+
+      const syncToGoogleSheet = async (recordsToSync, targetUrl = sheetUrl) => {
+        if (!targetUrl || !targetUrl.startsWith('https://script.google.com/')) {
+          setSyncStatus('synced');
+          return;
+        }
+
+        setSyncStatus('syncing');
+        try {
+          const payloadRecords = recordsToSync.map(r => {
+            const norm = normalizeRecord(r);
+            return {
+              ...norm,
+              flow: norm.recordType === 'spotting' ? `非經期出血(${norm.flow})` : norm.flow
             };
           });
 
@@ -787,7 +857,23 @@
                   <div key={record.id} className={`p-4 border rounded-2xl transition ${isSpotting ? 'border-[#FDE68A] bg-[#FFFBEB]/40' : 'border-[#EEF2F3] bg-white hover:border-[#DCE5E8]'}`}>
                     <div className="flex justify-between items-start">
                       <div className="flex items-center gap-3">
-                        <div className={`p-2.5 rounded-full text-sm ${isSpotting ? 'bg-[#FEF3C7] text-[#D97706]' : 'bg-[#FDE4EC] text-[#F04E7B]'}`}> {isSpotting ? '💧' : '🩸'} </div> <div> <div className="flex items-center gap-2"> <span className="font-num text-sm font-bold text-[#4A616A]"> {cleanStart === cleanEnd ? cleanStart : `${cleanStart} ~ ${cleanEnd}`} </span> {isSpotting && ( <span className="text-[10px] font-bold text-[#B45309] bg-[#FEF3C7] px-2 py-0.5 rounded-full"> 非經期異常出血 </span> )} </div> <div className="flex items-center gap-2 mt-1"> <span className="text-[11px] text-[#5B7B86] bg-[#F1F6F8] px-2.5 py-0.5 rounded-full">共 {daysCount} 天</span> <span className={`text-[11px] px-2.5 py-0.5 rounded-full ${isSpotting ? 'text-[#B45309] bg-[#FEF3C7]' : 'text-[#E64270] bg-[#FFF0F4]'}`}>
+                        <div className={`p-2.5 rounded-full text-sm ${isSpotting ? 'bg-[#FEF3C7] text-[#D97706]' : 'bg-[#FDE4EC] text-[#F04E7B]'}`}>
+                          {isSpotting ? '💧' : '🩸'}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-num text-sm font-bold text-[#4A616A]">
+                              {cleanStart === cleanEnd ? cleanStart : `${cleanStart} ~ ${cleanEnd}`}
+                            </span>
+                            {isSpotting && (
+                              <span className="text-[10px] font-bold text-[#B45309] bg-[#FEF3C7] px-2 py-0.5 rounded-full">
+                                非經期異常出血
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[11px] text-[#5B7B86] bg-[#F1F6F8] px-2.5 py-0.5 rounded-full">共 {daysCount} 天</span>
+                            <span className={`text-[11px] px-2.5 py-0.5 rounded-full ${isSpotting ? 'text-[#B45309] bg-[#FEF3C7]' : 'text-[#E64270] bg-[#FFF0F4]'}`}>
                               {isSpotting ? `程度：${record.flow}` : `流量：${record.flow || '中'}`}
                             </span>
                           </div>
@@ -839,4 +925,150 @@
           <h2 className="text-xl font-bold text-[#4A616A] mb-6">個人化設定</h2>
           
           {/* 動態預測狀態提示卡片 */}
-          <div className={`mb-6 p-3.5 rounded
+          <div className={`mb-6 p-3.5 rounded-2xl border text-xs leading-relaxed ${
+            cycleStats.isDynamic 
+              ? 'bg-[#F3F7F8] border-[#DCE5E8] text-[#4A616A]' 
+              : 'bg-[#FAF6F4] border-[#EFE5DF] text-[#6B828B]'
+          }`}>
+            {cycleStats.isDynamic ? (
+              <div>
+                <span className="font-bold text-[#5B7B86]">✨ 已啟用歷史平均自動預測：</span>
+                目前根據您歷年 <span className="font-num font-bold">{cycleStats.gapCount}</span> 次週期間隔，自動以平均週期 <span className="font-num font-bold text-[#F04E7B]">{cycleStats.effectiveCycleLength} 天</span>（原始平均 {cycleStats.rawAvgCycle} 天）、平均行經 <span className="font-num font-bold text-[#F04E7B]">{cycleStats.effectivePeriodLength} 天</span>推算下次經期（與 Google 試算表公式一致）。
+              </div>
+            ) : (
+              <div>
+                <span className="font-bold text-[#4A616A]">📌 目前使用手動基準設定：</span>
+                累積 2 筆以上正式月經紀錄後，系統將自動切換為歷史平均週期推算。
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-6">
+            <div>
+              <div className="flex justify-between mb-2">
+                <label className="text-sm font-medium text-[#4A616A]">⏳ 預設基準週期（紀錄不足 2 筆時使用）</label>
+                <span className="font-num text-sm font-bold text-[#F04E7B]">{settings.cycleLength} 天</span>
+              </div>
+              <input type="range" name="cycleLength" min="21" max="45" value={settings.cycleLength} onChange={e => { const v = { ...settings, cycleLength: parseInt(e.target.value) }; setSettings(v); saveData('menstrual_settings', v); }} className="w-full accent-[#F04E7B]" />
+            </div>
+            
+            <div>
+              <div className="flex justify-between mb-2">
+                <label className="text-sm font-medium text-[#4A616A]">🩸 預設基準行經期（紀錄不足 2 筆時使用）</label>
+                <span className="font-num text-sm font-bold text-[#F04E7B]">{settings.periodLength} 天</span>
+              </div>
+              <input type="range" name="periodLength" min="3" max="10" value={settings.periodLength} onChange={e => { const v = { ...settings, periodLength: parseInt(e.target.value) }; setSettings(v); saveData('menstrual_settings', v); }} className="w-full accent-[#F04E7B]" />
+            </div>
+          </div>
+
+          <div className="mt-8 pt-6 border-t border-[#EEF2F3]">
+            <h3 className="text-base font-bold text-[#4A616A] mb-2">📊 Google Sheets 雙向同步</h3>
+            <p className="text-xs text-[#6B828B] mb-3 leading-relaxed">
+              貼上 Google Apps Script 網址後，新增或修改紀錄會自動寫入「紀錄明細」並更新統計圖表；更換新裝置時也可直接從雲端拉回歷史資料。
+            </p>
+            <div className="bg-[#F3F7F8] p-3.5 rounded-2xl border border-[#DCE5E8] space-y-2.5">
+              <input 
+                type="url" 
+                value={sheetUrl}
+                onChange={e => handleSaveSheetUrl(e.target.value)}
+                placeholder="https://script.google.com/macros/s/.../exec"
+                className="w-full text-xs text-[#4A616A] p-2.5 border border-[#DCE5E8] rounded-xl bg-white outline-none focus:border-[#5B7B86]"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <button 
+                  onClick={() => syncToGoogleSheet(records)}
+                  disabled={!sheetUrl || syncStatus === 'syncing'}
+                  className="bg-[#5B7B86] text-white rounded-xl py-2 text-xs font-medium hover:bg-[#4A6670] disabled:opacity-50 transition"
+                >
+                  ⬆️ 上傳寫入雲端
+                </button>
+                <button 
+                  onClick={() => fetchFromGoogleSheet(sheetUrl, false)}
+                  disabled={!sheetUrl || syncStatus === 'syncing'}
+                  className="bg-white text-[#5B7B86] border border-[#B9CBD1] rounded-xl py-2 text-xs font-medium hover:bg-[#F7FAFB] disabled:opacity-50 transition"
+                >
+                  ⬇️ 從雲端讀取還原
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-8 pt-6 border-t border-[#EEF2F3]">
+            <h3 className="text-base font-bold text-[#4A616A] mb-2">🔄 離線備份碼轉移</h3>
+            <p className="text-xs text-[#6B828B] mb-4 leading-relaxed">
+              若未使用 Google Sheets，也可透過產生備份碼手動轉移資料。
+            </p>
+
+            <div className="space-y-4">
+              <div className="bg-[#FAF6F4] p-3.5 rounded-2xl border border-[#EFE5DF]">
+                <button onClick={handleExportData} className="w-full bg-white text-[#5B7B86] border border-[#DCE5E8] rounded-xl py-2 text-sm font-medium hover:bg-gray-50 transition mb-2">
+                  1. 產生備份碼 (匯出)
+                </button>
+                {backupCode && (
+                  <textarea 
+                    readOnly 
+                    value={backupCode} 
+                    onClick={e => e.target.select()}
+                    className="w-full text-[10px] text-gray-400 p-2 border border-gray-200 rounded-xl bg-white h-20 outline-none resize-none" 
+                    placeholder="備份碼會顯示在這裡，請全選並複製..."
+                  />
+                )}
+              </div>
+
+              <div className="bg-[#FAF6F4] p-3.5 rounded-2xl border border-[#EFE5DF]">
+                <textarea 
+                  value={importCode} 
+                  onChange={e => setImportCode(e.target.value)} 
+                  placeholder="2. 在此貼上從其他裝置複製的備份碼..." 
+                  className="w-full text-[10px] text-gray-700 p-2 border border-gray-200 rounded-xl bg-white h-20 outline-none focus:border-[#F04E7B] resize-none mb-2" 
+                />
+                <button 
+                  onClick={handleImportData} 
+                  disabled={!importCode.trim()} 
+                  className="w-full bg-[#F04E7B] text-white rounded-xl py-2 text-sm font-medium hover:bg-[#DE3C69] disabled:opacity-50 transition"
+                >
+                  3. 還原資料 (匯入)
+                </button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      );
+
+      return (
+        <div className="min-h-screen">
+          <header className="bg-white/80 backdrop-blur-md px-4 py-3.5 border-b border-[#EADCD5] sticky top-0 z-30">
+            <div className="max-w-3xl mx-auto flex items-center justify-between">
+              <h1 className="text-base font-bold text-[#4A616A] flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#F04E7B] inline-block"></span>
+                <span>生理週期紀錄</span>
+              </h1>
+              <div className="text-xs font-medium">
+                {syncStatus === 'syncing' && <span className="text-[#F04E7B]">☁️ 同步中...</span>}
+                {syncStatus === 'synced' && <span className="text-[#5B7B86]">{sheetUrl ? '✅ 已同步雲端' : '✅ 已儲存本機'}</span>}
+                {syncStatus === 'error' && <span className="text-red-500">⚠️ 同步異常</span>}
+              </div>
+            </div>
+          </header>
+          <main className="max-w-3xl mx-auto p-4 sm:p-6 pt-5">
+            {activeTab === 'calendar' && renderCalendar()}
+            {activeTab === 'history' && renderHistory()}
+            {activeTab === 'settings' && renderSettings()}
+          </main>
+          <nav className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-[#EADCD5] pb-safe shadow-[0_-4px_16px_rgba(91,123,134,0.06)] z-30">
+            <div className="max-w-3xl mx-auto flex justify-around">
+              <button onClick={() => setActiveTab('calendar')} className={`flex-1 py-3 flex flex-col items-center gap-1 transition ${activeTab === 'calendar' ? 'text-[#F04E7B] font-bold' : 'text-[#8FA3AB]'}`}><span className="text-lg">📅</span><span className="text-[10px]">預測日曆</span></button>
+              <button onClick={() => setActiveTab('history')} className={`flex-1 py-3 flex flex-col items-center gap-1 transition ${activeTab === 'history' ? 'text-[#F04E7B] font-bold' : 'text-[#8FA3AB]'}`}><span className="text-lg">⏳</span><span className="text-[10px]">歷年紀錄</span></button>
+              <button onClick={() => setActiveTab('settings')} className={`flex-1 py-3 flex flex-col items-center gap-1 transition ${activeTab === 'settings' ? 'text-[#F04E7B] font-bold' : 'text-[#8FA3AB]'}`}><span className="text-lg">⚙️</span><span className="text-[10px]">設定</span></button>
+            </div>
+          </nav>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
