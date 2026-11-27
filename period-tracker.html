@@ -110,7 +110,7 @@
       return isNaN(diff) ? 0 : diff;
     };
 
-    // 正規化整筆紀錄（自動識別是否為非經期異常出血）
+    // 正規化整筆紀錄
     const normalizeRecord = (r) => {
       const rawFlow = String(r.flow || '中');
       const isSpotting = r.recordType === 'spotting' || rawFlow.startsWith('非經期出血');
@@ -270,7 +270,7 @@
         }
       };
 
-      // 僅篩選「正式月經」來計算週期與預測，排除非經期異常出血
+      // 僅篩選「正式月經」紀錄
       const periodRecords = useMemo(() => {
         return records.filter(r => r.recordType !== 'spotting');
       }, [records]);
@@ -279,18 +279,16 @@
         return records.filter(r => r.recordType === 'spotting');
       }, [records]);
 
-      // 動態計算歷史平均週期與平均行經天數（與 Google 試算表公式一致）
+      // 動態計算歷史平均週期
       const cycleStats = useMemo(() => {
         const sortedPeriods = [...periodRecords].sort((a, b) => a.startDate.localeCompare(b.startDate));
         
-        // 計算平均行經天數
         let avgPeriodLen = settings.periodLength;
         if (sortedPeriods.length >= 1) {
           const totalDuration = sortedPeriods.reduce((sum, r) => sum + calcDaysDiff(r.startDate, r.endDate), 0);
           avgPeriodLen = Math.round(totalDuration / sortedPeriods.length);
         }
 
-        // 計算歷史平均週期天數（需至少 2 筆正式月經紀錄才有間隔天數）
         if (sortedPeriods.length >= 2) {
           const gaps = [];
           for (let i = 1; i < sortedPeriods.length; i++) {
@@ -325,7 +323,7 @@
         return [...periodRecords].sort((a, b) => (a.startDate < b.startDate ? 1 : -1))[0];
       }, [periodRecords]);
 
-      // 採用動態計算的 effectiveCycleLength 與 effectivePeriodLength 推算未來 6 個週期
+      // 修正重點：使用一組精準的 start 到 end 推算預測期 (防止月曆上顯示為整月虛線)
       const predictions = useMemo(() => {
         if (!latestRecord) return [];
         const preds = [];
@@ -335,18 +333,18 @@
 
         for (let i = 1; i <= 6; i++) {
           const nextCycleStart = addDays(currentCycleStart, cycleDays);
-          const nextCycleEnd = addDays(nextCycleStart, periodDays - 1);
+          const nextCycleEnd = addDays(nextCycleStart, periodDays - 1); // 精準限定為 5 天行經期
           const followingCycleStart = addDays(nextCycleStart, cycleDays);
-          const ovulation = addDays(followingCycleStart, -14);
-          const fertileStart = addDays(ovulation, -5);
-          const fertileEnd = addDays(ovulation, 1);
+          const ovulation = formatDateObj(addDays(followingCycleStart, -14));
+          const fertileStart = formatDateObj(addDays(addDays(followingCycleStart, -14), -5));
+          const fertileEnd = formatDateObj(addDays(addDays(followingCycleStart, -14), 1));
 
           preds.push({
             start: formatDateObj(nextCycleStart),
             end: formatDateObj(nextCycleEnd),
-            ovulation: formatDateObj(ovulation),
-            fertileStart: formatDateObj(fertileStart),
-            fertileEnd: formatDateObj(fertileEnd)
+            ovulation: ovulation,
+            fertileStart: fertileStart,
+            fertileEnd: fertileEnd
           });
           currentCycleStart = nextCycleStart;
         }
@@ -387,11 +385,22 @@
           let isOvulation = false;
           let isFertile = false;
 
+          // 當前日期在最新一筆正式月經結束日之後、且大於等於今天時，才進行未來預測
           if (!isActualPeriod && !isSpotting && dateStr > latestEndDate && dateStr >= todayStr) {
             for (const p of predictions) {
-              if (isDateBetween(dateStr, p.start, p.end)) isPredictedPeriod = true;
-              if (dateStr === p.ovulation) isOvulation = true;
-              if (isDateBetween(dateStr, p.fertileStart, p.fertileEnd) && dateStr !== p.ovulation) isFertile = true;
+              // 採用 isDateBetween 嚴格限制：僅在預估的 start 到 end 區間內（如4號～8號）才顯示預測色塊
+              if (isDateBetween(dateStr, p.start, p.end)) {
+                isPredictedPeriod = true;
+                break;
+              }
+              if (dateStr === p.ovulation) {
+                isOvulation = true;
+                break;
+              }
+              if (isDateBetween(dateStr, p.fertileStart, p.fertileEnd)) {
+                isFertile = true;
+                break;
+              }
             }
           }
 
@@ -689,7 +698,6 @@
         );
       };
 
-      // 共用表單欄位（支援「正式月經」與「非經期異常出血」切換）
       const renderRecordFormFields = (data, setData) => {
         const isSpotting = data.recordType === 'spotting';
         const activeFlowOptions = isSpotting ? SPOTTING_FLOW_OPTIONS : FLOW_OPTIONS;
@@ -697,7 +705,6 @@
 
         return (
           <div className="space-y-4">
-            {/* 紀錄類型切換 */}
             <div>
               <label className="block text-xs text-[#5B7B86] mb-1.5">紀錄類型</label>
               <div className="grid grid-cols-2 gap-2">
@@ -866,7 +873,7 @@
                               {cleanStart === cleanEnd ? cleanStart : `${cleanStart} ~ ${cleanEnd}`}
                             </span>
                             {isSpotting && (
-                              <span className="text-[10px] font-bold text-[#B45309] bg-[#FEF3C7] px-2 py-0.5 rounded-full">
+                              <span className="text-[10px] font-bold text-[#B45309] bg-[#FEF3C7] px-2.5 py-0.5 rounded-full">
                                 非經期異常出血
                               </span>
                             )}
@@ -924,7 +931,6 @@
         <div className="bg-white rounded-3xl shadow-[0_10px_28px_rgba(91,123,134,0.08)] p-5 sm:p-7 animate-fade-in mb-24">
           <h2 className="text-xl font-bold text-[#4A616A] mb-6">個人化設定</h2>
           
-          {/* 動態預測狀態提示卡片 */}
           <div className={`mb-6 p-3.5 rounded-2xl border text-xs leading-relaxed ${
             cycleStats.isDynamic 
               ? 'bg-[#F3F7F8] border-[#DCE5E8] text-[#4A616A]' 
@@ -1001,7 +1007,7 @@
 
             <div className="space-y-4">
               <div className="bg-[#FAF6F4] p-3.5 rounded-2xl border border-[#EFE5DF]">
-                <button onClick={handleExportData} className="w-full bg-white text-[#5B7B86] border border-[#DCE5E8] rounded-xl py-2 text-sm font-medium hover:bg-gray-50 transition mb-2">
+                <button onClick={handleExportData} className="w-full bg-white text-[#5B7B86] border-[#DCE5E8] rounded-xl py-2 text-sm font-medium hover:bg-gray-50 transition mb-2">
                   1. 產生備份碼 (匯出)
                 </button>
                 {backupCode && (
