@@ -31,7 +31,7 @@
   <script type="text/babel">
     const { useState, useMemo, useEffect } = React;
 
-    // 預設症狀選項與流量選項
+    // 與 Google Sheets「週期統計分析」完全對齊的選項
     const SYMPTOM_OPTIONS = ['腹痛', '腰痠', '頭痛', '疲倦', '水腫', '情緒低落', '長痘痘', '胸部脹痛'];
     const FLOW_OPTIONS = ['少', '中', '多'];
 
@@ -114,7 +114,7 @@
         } catch (error) {
           console.error('從 Google Sheets 讀取失敗:', error);
           setSyncStatus('error');
-          if (!silent) alert('❌ 讀取失敗，請確認網址是否正確且已部署「新版本」。');
+          if (!silent) alert('❌ 讀取失敗，請確認網址是否正確，且 Apps Script 部署權限已設為「所有人」。');
         }
       };
 
@@ -141,7 +141,7 @@
           }]);
         }
 
-        // 若有綁定雲端網址，開啟時自動背景拉取最新資料
+        // 若已設定網址，啟動時自動從雲端拉取最新紀錄
         if (savedSheetUrl) {
           fetchFromGoogleSheet(savedSheetUrl, true);
         }
@@ -551,7 +551,7 @@
           <div className="mt-8 pt-6 border-t border-gray-100">
             <h3 className="text-base font-bold text-gray-800 mb-2">📊 Google Sheets 雙向同步</h3>
             <p className="text-xs text-gray-500 mb-3 leading-relaxed">
-              貼上 Google Apps Script 網址後，新增或修改紀錄會自動寫入試算表；更換新裝置時也可直接從雲端拉回歷史資料。
+              貼上 Google Apps Script 網址後，新增或修改紀錄會自動寫入「紀錄明細」並更新統計圖表；更換新裝置時也可直接從雲端拉回歷史資料。
             </p>
             <div className="bg-emerald-50/60 p-3 rounded-xl border border-emerald-100 space-y-2.5">
               <input 
