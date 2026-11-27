@@ -97,6 +97,7 @@
     const isDateBetween = (targetStr, startStr, endStr) => {
       const s = normalizeDateStr(startStr);
       const e = normalizeDateStr(endStr);
+      if (!s || !e) return false;
       return targetStr >= s && targetStr <= e;
     };
 
@@ -279,14 +280,18 @@
         return records.filter(r => r.recordType === 'spotting');
       }, [records]);
 
-      // 動態計算歷史平均週期
+      // 動態計算歷史平均週期（加入合理範圍防呆：1~14天行經期、15~90天週期）
       const cycleStats = useMemo(() => {
         const sortedPeriods = [...periodRecords].sort((a, b) => a.startDate.localeCompare(b.startDate));
         
         let avgPeriodLen = settings.periodLength;
-        if (sortedPeriods.length >= 1) {
-          const totalDuration = sortedPeriods.reduce((sum, r) => sum + calcDaysDiff(r.startDate, r.endDate), 0);
-          avgPeriodLen = Math.round(totalDuration / sortedPeriods.length);
+        const validDurations = sortedPeriods
+          .map(r => calcDaysDiff(r.startDate, r.endDate))
+          .filter(d => d >= 1 && d <= 14);
+        
+        if (validDurations.length >= 1) {
+          const totalDuration = validDurations.reduce((sum, d) => sum + d, 0);
+          avgPeriodLen = Math.round(totalDuration / validDurations.length);
         }
 
         if (sortedPeriods.length >= 2) {
@@ -295,7 +300,7 @@
             const prevStart = parseDateStr(sortedPeriods[i - 1].startDate);
             const currStart = parseDateStr(sortedPeriods[i].startDate);
             const gap = Math.round((currStart - prevStart) / (1000 * 60 * 60 * 24));
-            if (gap > 0) gaps.push(gap);
+            if (gap >= 15 && gap <= 90) gaps.push(gap);
           }
           if (gaps.length > 0) {
             const rawAvg = gaps.reduce((a, b) => a + b, 0) / gaps.length;
@@ -312,7 +317,7 @@
         return {
           effectiveCycleLength: settings.cycleLength,
           rawAvgCycle: null,
-          effectivePeriodLength: settings.periodLength,
+          effectivePeriodLength: avgPeriodLen,
           isDynamic: false,
           gapCount: 0
         };
@@ -323,28 +328,26 @@
         return [...periodRecords].sort((a, b) => (a.startDate < b.startDate ? 1 : -1))[0];
       }, [periodRecords]);
 
-      // 修正重點：使用一組精準的 start 到 end 推算預測期 (防止月曆上顯示為整月虛線)
+      // 精準計算未來 6 個週期（每次僅標記 start 至 start + periodDays - 1）
       const predictions = useMemo(() => {
         if (!latestRecord) return [];
         const preds = [];
         let currentCycleStart = parseDateStr(latestRecord.startDate);
         const cycleDays = cycleStats.effectiveCycleLength;
-        const periodDays = cycleStats.effectivePeriodLength;
+        const periodDays = Math.min(Math.max(cycleStats.effectivePeriodLength, 3), 10);
 
         for (let i = 1; i <= 6; i++) {
           const nextCycleStart = addDays(currentCycleStart, cycleDays);
-          const nextCycleEnd = addDays(nextCycleStart, periodDays - 1); // 精準限定為 5 天行經期
+          const nextCycleEnd = addDays(nextCycleStart, periodDays - 1);
           const followingCycleStart = addDays(nextCycleStart, cycleDays);
-          const ovulation = formatDateObj(addDays(followingCycleStart, -14));
-          const fertileStart = formatDateObj(addDays(addDays(followingCycleStart, -14), -5));
-          const fertileEnd = formatDateObj(addDays(addDays(followingCycleStart, -14), 1));
+          const ovulationDateObj = addDays(followingCycleStart, -14);
 
           preds.push({
             start: formatDateObj(nextCycleStart),
             end: formatDateObj(nextCycleEnd),
-            ovulation: ovulation,
-            fertileStart: fertileStart,
-            fertileEnd: fertileEnd
+            ovulation: formatDateObj(ovulationDateObj),
+            fertileStart: formatDateObj(addDays(ovulationDateObj, -5)),
+            fertileEnd: formatDateObj(addDays(ovulationDateObj, 1))
           });
           currentCycleStart = nextCycleStart;
         }
@@ -385,10 +388,8 @@
           let isOvulation = false;
           let isFertile = false;
 
-          // 當前日期在最新一筆正式月經結束日之後、且大於等於今天時，才進行未來預測
           if (!isActualPeriod && !isSpotting && dateStr > latestEndDate && dateStr >= todayStr) {
             for (const p of predictions) {
-              // 採用 isDateBetween 嚴格限制：僅在預估的 start 到 end 區間內（如4號～8號）才顯示預測色塊
               if (isDateBetween(dateStr, p.start, p.end)) {
                 isPredictedPeriod = true;
                 break;
@@ -1007,7 +1008,7 @@
 
             <div className="space-y-4">
               <div className="bg-[#FAF6F4] p-3.5 rounded-2xl border border-[#EFE5DF]">
-                <button onClick={handleExportData} className="w-full bg-white text-[#5B7B86] border-[#DCE5E8] rounded-xl py-2 text-sm font-medium hover:bg-gray-50 transition mb-2">
+                <button onClick={handleExportData} className="w-full bg-white text-[#5B7B86] border border-[#DCE5E8] rounded-xl py-2 text-sm font-medium hover:bg-gray-50 transition mb-2">
                   1. 產生備份碼 (匯出)
                 </button>
                 {backupCode && (
@@ -1049,6 +1050,7 @@
               <h1 className="text-base font-bold text-[#4A616A] flex items-center gap-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#F04E7B] inline-block"></span>
                 <span>生理週期紀錄</span>
+                <span className="text-[10px] font-normal text-[#8FA3AB] bg-[#F3F7F8] px-1.5 py-0.5 rounded">v2.1</span>
               </h1>
               <div className="text-xs font-medium">
                 {syncStatus === 'syncing' && <span className="text-[#F04E7B]">☁️ 同步中...</span>}
