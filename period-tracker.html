@@ -8,7 +8,7 @@
   <!-- 載入 Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- 載入 Google Fonts：Montserrat (大字月份)、Playfair Display (英文月份)、Noto Sans TC -->
+  <!-- 載入 Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&family=Noto+Sans+TC:wght@400;500;700&family=Playfair+Display:ital,wght@0,600;1,500&display=swap" rel="stylesheet">
@@ -39,7 +39,6 @@
   <script type="text/babel">
     const { useState, useMemo, useEffect } = React;
 
-    // 與 Google Sheets「週期統計分析」完全對齊的選項
     const SYMPTOM_OPTIONS = ['腹痛', '腰痠', '頭痛', '疲倦', '水腫', '情緒低落', '長痘痘', '胸部脹痛'];
     const FLOW_OPTIONS = ['少', '中', '多'];
     const MONTH_NAMES_TITLE = [
@@ -256,22 +255,24 @@
         return [...records].sort((a, b) => (a.startDate < b.startDate ? 1 : -1))[0];
       }, [records]);
 
+      // 修正重點：只針對「最新一筆實際紀錄之後的未來週期」進行預測，不再回頭標記過去月份的排卵/易孕期
       const predictions = useMemo(() => {
         if (!latestRecord) return [];
         const preds = [];
         let currentCycleStart = parseDateStr(latestRecord.startDate);
 
-        for (let i = 0; i <= 5; i++) {
+        // 從 i = 1（下一個週期）開始往後預測 6 個週期
+        for (let i = 1; i <= 6; i++) {
           const nextCycleStart = addDays(currentCycleStart, settings.cycleLength);
-          const currentCycleEnd = addDays(currentCycleStart, settings.periodLength - 1);
-          const ovulation = addDays(nextCycleStart, -14);
+          const nextCycleEnd = addDays(nextCycleStart, settings.periodLength - 1);
+          const followingCycleStart = addDays(nextCycleStart, settings.cycleLength);
+          const ovulation = addDays(followingCycleStart, -14);
           const fertileStart = addDays(ovulation, -5);
           const fertileEnd = addDays(ovulation, 1);
 
           preds.push({
-            isPrediction: i > 0, 
-            start: formatDateObj(currentCycleStart),
-            end: formatDateObj(currentCycleEnd),
+            start: formatDateObj(nextCycleStart),
+            end: formatDateObj(nextCycleEnd),
             ovulation: formatDateObj(ovulation),
             fertileStart: formatDateObj(fertileStart),
             fertileEnd: formatDateObj(fertileEnd)
@@ -281,9 +282,10 @@
         return preds;
       }, [latestRecord, settings]);
 
-      // 計算距離下次經期天數（顯示於左側主視覺欄）
+      // 計算距離下次經期天數
       const nextCycleInfo = useMemo(() => {
-        const nextPred = predictions.find(p => p.isPrediction && p.start >= todayStr) || predictions[1];
+        if (predictions.length === 0) return null;
+        const nextPred = predictions.find(p => p.start >= todayStr) || predictions[0];
         if (!nextPred) return null;
         const todayObj = parseDateStr(todayStr);
         const targetObj = parseDateStr(nextPred.start);
@@ -291,16 +293,18 @@
         return { date: nextPred.start, daysLeft: diff };
       }, [predictions, todayStr]);
 
-      // 依圖二採用「週一 (Mo) 到 週日 (Su)」排列，保留圖一純淨無框線留白網格
       const calendarDays = useMemo(() => {
         const year = currentMonth.getFullYear();
         const month = currentMonth.getMonth();
-        const rawFirstDay = new Date(year, month, 1).getDay(); // 0(日)~6(六)
-        const leadingEmpty = rawFirstDay === 0 ? 6 : rawFirstDay - 1; // 轉換為週一為首 (0~6)
+        const rawFirstDay = new Date(year, month, 1).getDay();
+        const leadingEmpty = rawFirstDay === 0 ? 6 : rawFirstDay - 1;
         const daysInMonth = new Date(year, month + 1, 0).getDate();
         
         const days = [];
         for (let i = 0; i < leadingEmpty; i++) days.push(null);
+        
+        // 取得最後一筆實際經期的結束日，確保該日期（含）之前只顯示實際紀錄，絕不顯示預測色塊
+        const latestEndDate = latestRecord ? normalizeDateStr(latestRecord.endDate) : '';
         
         for (let i = 1; i <= daysInMonth; i++) {
           const dateObj = new Date(year, month, i);
@@ -313,10 +317,13 @@
           let isOvulation = false;
           let isFertile = false;
 
-          for (const p of predictions) {
-            if (p.isPrediction && isDateBetween(dateStr, p.start, p.end)) isPredictedPeriod = true;
-            if (dateStr === p.ovulation) isOvulation = true;
-            if (isDateBetween(dateStr, p.fertileStart, p.fertileEnd) && dateStr !== p.ovulation) isFertile = true;
+          // 僅在「最新一筆實際經期結束之後」且「不早於今天」的未來日期才套用預測標記
+          if (!isActualPeriod && dateStr > latestEndDate && dateStr >= todayStr) {
+            for (const p of predictions) {
+              if (isDateBetween(dateStr, p.start, p.end)) isPredictedPeriod = true;
+              if (dateStr === p.ovulation) isOvulation = true;
+              if (isDateBetween(dateStr, p.fertileStart, p.fertileEnd) && dateStr !== p.ovulation) isFertile = true;
+            }
           }
 
           if (isActualPeriod) type = 'actual_period';
@@ -333,7 +340,7 @@
           });
         }
         return days;
-      }, [currentMonth, records, predictions, todayStr]);
+      }, [currentMonth, records, predictions, todayStr, latestRecord]);
 
       const handleAddRecord = (e) => {
         e.preventDefault();
@@ -396,7 +403,7 @@
         }
       };
 
-      // --- 畫面渲染：圖二雙欄桌曆＋圖一留白花草美學 ---
+      // --- 畫面渲染 ---
       const renderCalendar = () => {
         const monthNumStr = String(currentMonth.getMonth() + 1).padStart(2, '0');
         const monthTitleStr = MONTH_NAMES_TITLE[currentMonth.getMonth()];
@@ -404,7 +411,7 @@
 
         return (
           <div className="relative pt-3 mb-24 animate-fade-in">
-            {/* 頂部線圈裝訂裝飾（參考圖二桌曆頂部） */}
+            {/* 頂部線圈裝訂裝飾 */}
             <div className="flex justify-around items-center px-6 sm:px-10 relative z-20 -mb-3.5 pointer-events-none select-none">
               {Array.from({ length: 14 }).map((_, i) => (
                 <div key={i} className="flex flex-col items-center">
@@ -414,18 +421,16 @@
               ))}
             </div>
 
-            {/* 桌曆主體卡片（桌機雙欄分割：左 36% 桃紅主視覺 / 右 64% 純白日曆網格） */}
+            {/* 桌曆主體卡片 */}
             <div className="bg-white rounded-3xl shadow-[0_14px_34px_rgba(91,123,134,0.12)] overflow-hidden grid grid-cols-1 md:grid-cols-12 relative">
               
-              {/* 左側主視覺側欄 (圖二風格：莓果桃紅底色 + 大字月份 + 幾何交疊白圈) */}
+              {/* 左側主視覺側欄 */}
               <div className="md:col-span-5 bg-gradient-to-br from-[#F2527E] to-[#E64270] text-white p-6 sm:p-8 flex flex-col justify-between relative overflow-hidden min-h-[210px] md:min-h-[460px]">
-                {/* 左下角交疊幾何細白圓圈（取材自圖二左下裝飾） */}
                 <div className="pointer-events-none select-none">
                   <div className="w-28 h-28 rounded-full border border-white/55 absolute -bottom-8 left-12"></div>
                   <div className="w-16 h-16 rounded-full border border-white/55 absolute bottom-2 left-6"></div>
                 </div>
 
-                {/* 上半部：大字月份與年份 */}
                 <div className="flex md:flex-col items-baseline md:items-start justify-between z-10">
                   <div>
                     <div className="font-num text-[76px] sm:text-[96px] leading-[0.95] font-bold tracking-tight drop-shadow-xs select-none">
@@ -439,7 +444,6 @@
                     </div>
                   </div>
 
-                  {/* 月份切換與今天膠囊控制 */}
                   <div className="flex flex-col md:flex-row items-end md:items-center gap-2 md:mt-6">
                     <div className="flex items-center gap-1 bg-white/15 backdrop-blur-xs p-1 rounded-full border border-white/25">
                       <button 
@@ -466,7 +470,6 @@
                   </div>
                 </div>
 
-                {/* 下半部：週期倒數小卡片（融合實用資訊） */}
                 {nextCycleInfo && (
                   <div className="mt-5 md:mt-auto pt-4 border-t border-white/20 z-10">
                     <div className="text-[11px] uppercase tracking-wider text-white/80">Next Period Forecast</div>
@@ -480,25 +483,22 @@
                 )}
               </div>
 
-              {/* 右側日曆主區 (圖一風格：大留白無格線＋莫蘭迪藍灰字體＋右下角花草插畫) */}
+              {/* 右側日曆主區 */}
               <div className="md:col-span-7 bg-white p-5 sm:p-8 flex flex-col justify-between relative overflow-hidden">
                 
-                {/* 右下角手繪水彩花草裝飾 SVG（取材自圖一右下薰衣草與粉櫻花穗） */}
+                {/* 右下角手繪水彩花草裝飾 SVG */}
                 <svg 
                   className="pointer-events-none select-none absolute -bottom-2 -right-2 w-40 h-44 sm:w-48 sm:h-52 opacity-85" 
                   viewBox="0 0 200 220" 
                   fill="none" 
                   xmlns="http://www.w3.org/2000/svg"
                 >
-                  {/* 鼠尾草綠花莖與葉片 */}
                   <path d="M125 220C132 175 148 125 142 65" stroke="#7D9A82" strokeWidth="2.5" strokeLinecap="round"/>
                   <path d="M100 220C115 185 128 155 130 120" stroke="#4D8069" strokeWidth="2.2" strokeLinecap="round"/>
                   <path d="M80 220C92 195 104 175 110 150" stroke="#8BA58E" strokeWidth="2" strokeLinecap="round"/>
-                  {/* 綠葉 */}
                   <path d="M108 195C96 184 94 170 102 162C110 172 112 184 108 195Z" fill="#4D8069"/>
                   <path d="M126 185C138 175 146 164 142 155C132 162 126 173 126 185Z" fill="#4D8069"/>
                   <path d="M162 215C154 202 156 188 164 182C170 192 168 205 162 215Z" fill="#7D9A82"/>
-                  {/* 鵝黃色花穗（高處主花） */}
                   <g fill="#F6C87A">
                     <ellipse cx="141" cy="58" rx="4" ry="7" transform="rotate(-15 141 58)"/>
                     <ellipse cx="134" cy="68" rx="4" ry="7" transform="rotate(-35 134 68)"/>
@@ -508,7 +508,6 @@
                     <ellipse cx="136" cy="92" rx="4" ry="7" transform="rotate(-30 136 92)"/>
                     <ellipse cx="149" cy="91" rx="4" ry="7" transform="rotate(25 149 91)"/>
                   </g>
-                  {/* 柔粉色花穗（中層） */}
                   <g fill="#F8B4C8">
                     <ellipse cx="130" cy="112" rx="4.5" ry="8"/>
                     <ellipse cx="123" cy="122" rx="4" ry="7.5" transform="rotate(-25 123 122)"/>
@@ -517,7 +516,6 @@
                     <ellipse cx="137" cy="133" rx="4.5" ry="7" transform="rotate(20 137 133)"/>
                   </g>
                   <rect x="123" y="138" width="14" height="12" rx="6" fill="#FBE3EA"/>
-                  {/* 薰衣草淡紫花穗（左側） */}
                   <g fill="#D5B8F0">
                     <ellipse cx="111" cy="143" rx="3.5" ry="6.5" transform="rotate(15 111 143)"/>
                     <ellipse cx="104" cy="151" rx="3.5" ry="6" transform="rotate(-20 104 151)"/>
@@ -530,7 +528,6 @@
                 </svg>
 
                 <div className="z-10">
-                  {/* 星期標頭（依圖二採用 Mo ~ Su 週一至週日排序，圖一極簡無框留白） */}
                   <div className="grid grid-cols-7 gap-1 mb-4 pb-2 border-b border-[#EEF2F3]">
                     {['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map((day, idx) => {
                       const isWeekend = idx >= 5;
@@ -547,12 +544,10 @@
                     })}
                   </div>
 
-                  {/* 無框線留白日期網格（參考圖一與圖二日曆區） */}
                   <div className="grid grid-cols-7 gap-y-2.5 sm:gap-y-3.5 gap-x-1">
                     {calendarDays.map((cell, idx) => {
                       if (!cell) return <div key={idx} className="aspect-square"></div>;
 
-                      // 狀態圓圈樣式（結合圖二桃紅實心圓與圖一藍灰/薰衣草色調）
                       let circleClass = cell.isWeekend
                         ? 'text-[#E64270] font-semibold hover:bg-[#FFF0F4]'
                         : 'text-[#5B7B86] font-medium hover:bg-[#F3F7F8]';
@@ -581,7 +576,6 @@
                   </div>
                 </div>
 
-                {/* 底部圖例說明 */}
                 <div className="mt-7 pt-3.5 border-t border-[#EEF2F3] flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-[#5B7B86] z-10 pr-12">
                   <div className="flex items-center gap-1.5">
                     <span className="w-3 h-3 rounded-full bg-[#F04E7B] inline-block"></span>
@@ -606,7 +600,6 @@
         );
       };
 
-      // 共用的表單欄位渲染（同步新配色）
       const renderRecordFormFields = (data, setData) => (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
@@ -785,7 +778,6 @@
             </div>
           </div>
 
-          {/* Google Sheets 雙向同步區塊 */}
           <div className="mt-8 pt-6 border-t border-[#EEF2F3]">
             <h3 className="text-base font-bold text-[#4A616A] mb-2">📊 Google Sheets 雙向同步</h3>
             <p className="text-xs text-[#6B828B] mb-3 leading-relaxed">
@@ -818,7 +810,6 @@
             </div>
           </div>
 
-          {/* 跨裝置備份碼區塊 */}
           <div className="mt-8 pt-6 border-t border-[#EEF2F3]">
             <h3 className="text-base font-bold text-[#4A616A] mb-2">🔄 離線備份碼轉移</h3>
             <p className="text-xs text-[#6B828B] mb-4 leading-relaxed">
